@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Invader Radar">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<title>Invader Radar</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#000;--fg:#f2f2f2;--blue:#3d6bff;--dim:#777;--line:#fff;--font:'Press Start 2P','Courier New',monospace}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:10px/1.5 var(--font);overflow:hidden}
+#app{display:flex;flex-direction:column;height:100%;padding-top:env(safe-area-inset-top)}
+header{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:2px solid var(--line)}
+header b{color:var(--blue);font-weight:normal;font-size:12px}
+#map{flex:1;min-height:0;background:#000}
+.leaflet-tile-pane{filter:grayscale(1) invert(1) contrast(.85) brightness(.9)}
+.leaflet-container{font-family:var(--font)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#000;color:var(--fg);border:2px solid var(--line);border-radius:0}
+.leaflet-popup-content{font-size:9px;margin:10px;max-width:180px;word-wrap:break-word}
+.leaflet-popup-close-button{color:#fff!important}
+.inv{width:22px;height:16px}.inv svg{width:22px;height:16px;display:block;shape-rendering:crispEdges}
+.inv.done{opacity:.35;filter:grayscale(1)}
+.me{width:14px;height:14px;background:#fff;border:3px solid var(--blue);border-radius:50%}
+#panel{border-top:2px solid var(--line);padding:8px 10px calc(8px + env(safe-area-inset-bottom));display:grid;grid-template-columns:120px 1fr;gap:10px}
+canvas{width:120px;height:120px;border:2px solid var(--line)}
+#info{display:flex;flex-direction:column;gap:6px;min-width:0}
+#dist{font-size:16px;color:var(--blue)}
+#nm{font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sum{font-size:8px;color:var(--dim)}
+.row{display:flex;gap:6px;flex-wrap:wrap}
+button,select{font:9px var(--font);background:#000;color:var(--fg);border:2px solid var(--line);padding:7px 6px;border-radius:0}
+button:active{background:var(--blue)}
+button.on{background:#fff;color:#000}
+#start{position:fixed;inset:0;z-index:2000;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:24px}
+#start h1{font-size:18px;font-weight:normal;color:var(--blue);margin:0}
+#start p{font-size:9px;line-height:1.8;max-width:300px;margin:0}
+#start button{font-size:12px;padding:12px 18px}
+#banner{position:fixed;top:calc(env(safe-area-inset-top) + 44px);left:8px;right:8px;z-index:1500;background:var(--blue);color:#fff;border:2px solid #fff;padding:10px;display:none;font-size:10px;text-align:center}
+#dest{display:flex;gap:6px;padding:6px 10px;border-bottom:2px solid var(--line)}
+#q{flex:1;min-width:0;font:16px var(--font);background:#000;color:#fff;border:2px solid #fff;padding:6px;border-radius:0}
+#vars button{font-size:8px;padding:6px 5px}
+.stop{width:12px;height:12px;background:var(--blue);border:2px solid #fff}
+</style>
+</head>
+<body>
+<div id="app">
+  <header><b>INVADER RADAR</b><span id="count">...</span></header>
+  <div id="dest"><input id="q" placeholder="Destination..." enterkeyhint="go" autocomplete="off"><button id="go2">GO</button></div>
+  <div id="map"></div>
+  <div id="panel">
+    <canvas id="radar" width="240" height="240"></canvas>
+    <div id="info">
+      <div id="dist">--</div>
+      <div id="nm">Recherche du GPS...</div>
+      <div id="sum"></div>
+      <div class="row" id="vars"></div>
+      <div class="row">
+        <select id="len"><option value="1.5">1,5 km</option><option value="3" selected>3 km</option><option value="5">5 km</option><option value="8">8 km</option></select>
+        <button id="plan">ITINÉRAIRE</button>
+        <button id="ctr">CENTRER</button>
+        <button id="alert" class="on">ALERTE 50m</button>
+        <button id="hide">MASQUER FLASHÉS</button>
+        <button id="list">LISTE</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="banner"></div>
+<div id="start">
+  <h1>INVADER RADAR</h1>
+  <p>Trouve les Space Invaders pendant tes balades. Autorise la position, la boussole et les notifications, puis garde l'écran allumé.</p>
+  <button id="go">&gt; START</button>
+  <p id="err" style="color:#ff6b6b"></p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+const $=s=>document.querySelector(s), R=6371000, rad=x=>x*Math.PI/180;
+const dist=(a,b)=>{const h=Math.sin(rad(b[0]-a[0])/2)**2+Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(rad(b[1]-a[1])/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+const bearing=(a,b)=>{const y=Math.sin(rad(b[1]-a[1]))*Math.cos(rad(b[0])),x=Math.cos(rad(a[0]))*Math.sin(rad(b[0]))-Math.sin(rad(a[0]))*Math.cos(rad(b[0]))*Math.cos(rad(b[1]-a[1]));return(Math.atan2(y,x)*180/Math.PI+360)%360};
+const fmt=m=>m<1000?Math.round(m)+' m':(m/1000).toFixed(2).replace('.',',')+' km';
+const store={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+
+// ---------- Données ----------
+let pts=[], markers={}, flashed=new Set(store.get('flashed',[])), me=null, heading=null, swReg=null;
+const ICON='00100000100,00010001000,00111111100,01101110110,11111111111,10111111101,10100000101,00011011000';
+const svg=c=>'<svg viewBox="0 0 11 8">'+ICON.split(',').map((r,y)=>[...r].map((v,x)=>v=='1'?`<rect x="${x}" y="${y}" width="1" height="1" fill="${c}"/>`:'').join('')).join('')+'</svg>';
+const flat=d=>d.layers?d.layers.flatMap(flat):(d.features||[]);
+
+const map=L.map('map',{zoomControl:false}).setView([48.8566,2.3522],15);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+const routeLayer=L.layerGroup().addTo(map);
+
+function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML}
+function popup(p){
+  const el=document.createElement('div');
+  el.innerHTML=`<b>${esc(p.name)}</b><br>${esc(p.desc).slice(0,160)}<br><br>`;
+  const b=document.createElement('button');
+  const lab=()=>b.textContent=flashed.has(p.id)?'ANNULER FLASH':'FLASHÉ !';lab();
+  b.onclick=()=>{flashed.has(p.id)?flashed.delete(p.id):flashed.add(p.id);store.set('flashed',[...flashed]);style(p);lab();count();update();};
+  el.appendChild(b);return el;
+}
+let hideDone=store.get('hide',false);
+const style=p=>{const m=markers[p.id],f=flashed.has(p.id);
+  m.setIcon(L.divIcon({className:'inv'+(f?' done':''),html:svg(f?'#999':'#3d6bff'),iconSize:[22,16]}));
+  if(f&&hideDone)m.remove();else if(!map.hasLayer(m))m.addTo(map)};
+const count=()=>$('#count').textContent=`${flashed.size}/${pts.length} FLASHÉS`;
+
+fetch('invaders.geojson').then(r=>r.json()).then(d=>{
+  flat(d).forEach((f,i)=>{
+    if(!f.geometry||f.geometry.type!=='Point')return;
+    const [lon,lat]=f.geometry.coordinates, pr=f.properties||{};
+    const p={id:(pr.name||'i'+i)+'@'+lat.toFixed(5)+','+lon.toFixed(5),name:pr.name||'Invader',desc:pr.description||'',ll:[lat,lon]};
+    pts.push(p);
+    markers[p.id]=L.marker(p.ll).bindPopup(()=>popup(p));style(p);
+  });
+  count();update();
+}).catch(()=>{$('#count').textContent='DONNÉES ?';$('#nm').textContent='invaders.geojson introuvable'});
+
+// ---------- Position, radar, alertes ----------
+let alertM=50, alerted=new Set(store.get('alerted',[])), alertOn=true, first=true;
+function nearest(){let b=null,bd=1e12;if(!me)return null;for(const p of pts){if(flashed.has(p.id))continue;const d=dist(me,p.ll);if(d<bd){bd=d;b=p}}return b&&{p:b,d:bd}}
+function update(){
+  const n=nearest();
+  if(!n){$('#dist').textContent='--';return}
+  $('#dist').textContent=fmt(n.d);$('#nm').textContent=n.p.name;
+  if(alertOn&&n.d<=alertM&&!alerted.has(n.p.id)){alerted.add(n.p.id);store.set('alerted',[...alerted]);notify(n.p,n.d)}
+}
+function onPos(pos){
+  me=[pos.coords.latitude,pos.coords.longitude];
+  if(!window.meM)window.meM=L.marker(me,{icon:L.divIcon({className:'me',iconSize:[14,14]}),zIndexOffset:999}).addTo(map);else meM.setLatLng(me);
+  if(first){map.setView(me,17);first=false}
+  update();
+}
+let angle=0;
+function draw(){
+  const c=$('#radar'),x=c.getContext('2d'),W=240,r=W/2-8;x.clearRect(0,0,W,W);x.fillStyle='#000';x.fillRect(0,0,W,W);
+  x.strokeStyle='#444';x.lineWidth=2;[1,.66,.33].forEach(k=>{x.beginPath();x.arc(W/2,W/2,r*k,0,7);x.stroke()});
+  x.beginPath();x.moveTo(W/2,8);x.lineTo(W/2,W-8);x.moveTo(8,W/2);x.lineTo(W-8,W/2);x.stroke();
+  angle+=.04;x.strokeStyle='#3d6bff';x.beginPath();x.moveTo(W/2,W/2);x.lineTo(W/2+r*Math.sin(angle),W/2-r*Math.cos(angle));x.stroke();
+  x.fillStyle='#fff';x.font='16px monospace';x.fillText(heading==null?'N':'↑',W/2-5,20);
+  const n=nearest();
+  if(n){const a=rad(bearing(me,n.p.ll)-(heading||0)),k=Math.min(n.d/300,1)*r;
+    const bx=W/2+k*Math.sin(a),by=W/2-k*Math.cos(a);
+    x.fillStyle='#3d6bff';x.fillRect(bx-9,by-9,18,18);x.fillStyle='#fff';x.fillRect(bx-4,by-4,8,8);
+    x.strokeStyle='#fff';x.beginPath();x.moveTo(W/2,W/2);x.lineTo(W/2+30*Math.sin(a),W/2-30*Math.cos(a));x.stroke();}
+  requestAnimationFrame(draw);
+}
+draw();
+
+function beep(){try{const a=new (window.AudioContext||webkitAudioContext)(),o=a.createOscillator();o.type='square';o.connect(a.destination);
+  [880,660,880].forEach((f,i)=>o.frequency.setValueAtTime(f,a.currentTime+i*.12));o.start();o.stop(a.currentTime+.4)}catch{}}
+function notify(p,d){
+  const t=`INVADER À ${Math.round(d)} m : ${p.name}`;
+  beep();navigator.vibrate&&navigator.vibrate([200,100,200]);
+  const b=$('#banner');b.textContent='👾 '+t;b.style.display='block';setTimeout(()=>b.style.display='none',6000);
+  if('Notification' in window&&Notification.permission==='granted'&&swReg)swReg.showNotification('Space Invader !',{body:t,tag:p.id});
+}
+
+// ---------- Itinéraires (insertion la moins coûteuse + 2-opt) ----------
+const K=1.25; // coefficient "rues" appliqué à la distance à vol d'oiseau
+const D=(a,b)=>dist(a,b)*K, tot=r=>r.slice(1).reduce((t,n,i)=>t+D(r[i].ll,n.ll),0);
+function build(s,e,budget){ // départ s, arrivée e (boucle si s=e), longueur max budget (m)
+  let route=[{ll:s},{ll:e}], len=D(s,e);
+  const left=pts.filter(p=>!flashed.has(p.id)&&D(s,p.ll)+D(p.ll,e)<=budget);
+  while(left.length&&route.length<25){
+    let best=-1,bi=0,bc=1e12;
+    left.forEach((p,j)=>{for(let i=0;i<route.length-1;i++){const c=D(route[i].ll,p.ll)+D(p.ll,route[i+1].ll)-D(route[i].ll,route[i+1].ll);if(c<bc){bc=c;best=j;bi=i}}});
+    if(len+bc>budget)break;
+    route.splice(bi+1,0,{ll:left[best].ll,p:left[best]});len+=bc;left.splice(best,1);
+  }
+  let imp=true;while(imp){imp=false;for(let i=1;i<route.length-2;i++)for(let j=i+1;j<route.length-1;j++){
+    const c=route.slice(0,i).concat(route.slice(i,j+1).reverse(),route.slice(j+1));
+    if(tot(c)<tot(route)-1){route=c;imp=true}}}
+  return{route,stops:route.filter(n=>n.p),meters:tot(route)};
+}
+const info=(n,m,min)=>`${n} invaders · ${(m/1000).toFixed(1).replace('.',',')} km · ~${Math.round(min)} min`;
+let showId=0;
+async function show(r){
+  const id=++showId;routeLayer.clearLayers();
+  if(!r.stops.length){$('#sum').textContent='Aucun invader sur ce trajet';return}
+  r.stops.forEach(n=>L.marker(n.ll,{icon:L.divIcon({className:'stop',iconSize:[12,12]}),interactive:false}).addTo(routeLayer));
+  const end=r.route[r.route.length-1].ll;L.circleMarker(end,{radius:8,color:'#fff',fillColor:'#000',fillOpacity:1,weight:3}).addTo(routeLayer);
+  const line=L.polyline(r.route.map(n=>n.ll),{color:'#3d6bff',weight:4,dashArray:'6 6'}).addTo(routeLayer);
+  $('#sum').textContent=info(r.stops.length,r.meters,r.meters/1000*12);
+  map.fitBounds(line.getBounds(),{padding:[30,30]});
+  try{ // tracé piéton réel (service gratuit OSM, optionnel)
+    const c=r.route.map(n=>n.ll[1]+','+n.ll[0]).join(';');
+    const j=await (await fetch(`https://routing.openstreetmap.de/routed-foot/route/v1/foot/${c}?overview=full&geometries=geojson`)).json();
+    if(id===showId&&j.routes&&j.routes[0]){routeLayer.removeLayer(line);
+      L.geoJSON(j.routes[0].geometry,{style:{color:'#3d6bff',weight:5}}).addTo(routeLayer);
+      $('#sum').textContent=info(r.stops.length,j.routes[0].distance,j.routes[0].duration/60);}
+  }catch{}
+}
+const start=()=>me||[map.getCenter().lat,map.getCenter().lng];
+function plan(){ // balade en boucle
+  $('#vars').innerHTML='';const s=start();show(build(s,s,+$('#len').value*1000));
+}
+async function goDest(){ // A -> destination avec détours
+  const q=$('#q').value.trim();if(!q)return;
+  const sum=$('#sum'),vars=$('#vars');vars.innerHTML='';sum.textContent='Recherche...';
+  let e;
+  try{
+    const b=map.getBounds(),vb=[b.getWest(),b.getNorth(),b.getEast(),b.getSouth()].join(',');
+    const j=await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&viewbox=${vb}&q=${encodeURIComponent(q)}`)).json();
+    if(!j[0]){sum.textContent='Destination introuvable';return}
+    e=[+j[0].lat,+j[0].lon];
+  }catch{sum.textContent='Recherche impossible (réseau)';return}
+  const s=start(),d0=D(s,e);
+  const opts=[[1.15,'COURT'],[1.4,'MOYEN'],[1.8,'LONG']].map(([k,l])=>({l,r:build(s,e,Math.max(d0*k,d0+300))}));
+  opts.forEach(o=>{const b=document.createElement('button');
+    b.textContent=`${o.l} ${o.r.stops.length}👾 ${(o.r.meters/1000).toFixed(1).replace('.',',')}km`;
+    b.onclick=()=>show(o.r);vars.appendChild(b)});
+  show(opts[1].r);
+}
+
+// ---------- Boutons ----------
+$('#plan').onclick=plan;
+$('#go2').onclick=goDest;
+$('#q').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.target.blur();goDest()}});
+const hb=()=>{$('#hide').textContent=hideDone?'AFFICHER FLASHÉS':'MASQUER FLASHÉS';$('#hide').classList.toggle('on',hideDone)};hb();
+$('#hide').onclick=()=>{hideDone=!hideDone;store.set('hide',hideDone);hb();pts.forEach(style)};
+const norm=n=>n.toUpperCase().replace(/[^A-Z0-9]/g,'').replace(/^([A-Z]+)0+(\d)/,'$1$2');
+$('#list').onclick=()=>{ // import / export de la liste des invaders flashés (par nom, ex. PA_0123)
+  const cur=pts.filter(p=>flashed.has(p.id)).map(p=>p.name).join(', ');
+  const v=prompt('Liste des invaders flashés (noms séparés par des virgules). Colle la tienne pour importer :',cur);
+  if(v===null)return;
+  const want=new Set(v.split(/[\s,;]+/).filter(Boolean).map(norm));
+  flashed=new Set(pts.filter(p=>want.has(norm(p.name))).map(p=>p.id));
+  store.set('flashed',[...flashed]);pts.forEach(style);count();update();
+};
+$('#ctr').onclick=()=>me&&map.setView(me,17);
+$('#alert').onclick=e=>{const v=[50,100,0];alertM=v[(v.indexOf(alertM)+1)%3];alertOn=alertM>0;
+  e.target.textContent=alertOn?`ALERTE ${alertM}m`:'ALERTE OFF';e.target.classList.toggle('on',alertOn)};
+$('#go').onclick=async()=>{
+  if(!navigator.geolocation){$('#err').textContent='Géolocalisation indisponible';return}
+  try{if(DeviceOrientationEvent.requestPermission)await DeviceOrientationEvent.requestPermission()}catch{}
+  addEventListener('deviceorientation',e=>{heading=e.webkitCompassHeading??(e.alpha!=null?360-e.alpha:null)});
+  try{if('serviceWorker' in navigator)swReg=await navigator.serviceWorker.register('sw.js')}catch{}
+  try{if('Notification' in window)await Notification.requestPermission()}catch{}
+  try{await navigator.wakeLock?.request('screen')}catch{}
+  navigator.geolocation.watchPosition(onPos,e=>{$('#nm').textContent='GPS: '+e.message},{enableHighAccuracy:true,maximumAge:2000});
+  $('#start').style.display='none';
+};
+</script>
+</body>
+</html>
